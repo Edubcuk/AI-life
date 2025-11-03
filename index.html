@@ -3,17 +3,22 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>AI Life – Pixel Sandbox (Mobile-safe)</title>
+<title>AI Life – Pixel Sandbox (Best Mobile Build)</title>
 <style>
-  body{background:#111;color:#eee;font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif;margin:0}
-  header{padding:10px 14px;background:#1b1b1b;border-bottom:1px solid #333;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  :root { --bg:#111; --fg:#eee; --muted:#999; --panel:#1b1b1b; --border:#333; }
+  body{background:var(--bg);color:var(--fg);font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif;margin:0}
+  header{padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   header h1{font-size:16px;margin:0 10px 0 0;color:#9fe870}
-  button,input[type=range]{background:#242424;color:#eee;border:1px solid #444;border-radius:6px;padding:6px 10px}
-  #hud{padding:8px 14px;background:#151515;border-bottom:1px solid #333;display:flex;gap:16px;flex-wrap:wrap}
+  button,input[type=range],input[type=number]{background:#242424;color:var(--fg);border:1px solid #444;border-radius:6px;padding:6px 10px}
+  #hud{padding:8px 14px;background:#151515;border-bottom:1px solid var(--border);display:flex;gap:16px;flex-wrap:wrap}
   #wrap{display:flex;gap:12px;padding:12px}
-  #canvasWrap{image-rendering:pixelated;background:#000;border:1px solid #333}
+  #left{display:flex;flex-direction:column;gap:8px}
+  #canvasWrap{image-rendering:pixelated;background:#000;border:1px solid var(--border);position:relative}
+  #legend{position:absolute;left:8px;top:8px;background:rgba(0,0,0,.6);border:1px solid var(--border);padding:6px 8px;font-size:12px;border-radius:6px}
+  #legend .row{display:flex;align-items:center;gap:6px;margin:2px 0}
+  .chip{width:14px;height:14px;border-radius:3px;display:inline-block;border:1px solid #000}
   #view{display:block;background:#000}
-  #log{flex:1;min-width:300px;max-height:60vh;overflow:auto;background:#0f0f0f;border:1px solid #333;padding:10px;font-family:ui-monospace,Consolas,monospace;font-size:12px}
+  #log{flex:1;min-width:300px;max-height:60vh;overflow:auto;background:#0f0f0f;border:1px solid var(--border);padding:10px;font-family:ui-monospace,Consolas,monospace;font-size:12px}
   @media (max-width:900px){#wrap{flex-direction:column}#log{min-width:auto}}
 </style>
 </head>
@@ -24,51 +29,82 @@
   <button id="btnPause" disabled>⏸️ Pause</button>
   <button id="btnStep" disabled>⏭️ Step</button>
   <button id="btnReset" disabled>🔄 Reset</button>
-  <label>Speed <input id="speed" type="range" min="1" max="60" value="12"></label>
+  <label>Speed <input id="speed" type="range" min="1" max="60" value="18"></label>
   <label>Seed <input id="seed" type="number" value="22" style="width:80px"></label>
-  <span style="color:#999">Tap Start (iOS timer permission).</span>
+  <span style="color:#999">Tap Start (iOS timer rule).</span>
 </header>
 
 <div id="hud">
   <span id="hudStep">Step: 0</span>
-  <span id="hudAgents">Agents: 0</span>
+  <span id="hudAgents">Agents: 0/0</span>
   <span id="hudBuilds">Builds: 0</span>
   <span id="hudStock">Stockpile: wood 0 | stone 0</span>
   <span id="hudBirths">Births: 0</span>
 </div>
 
 <div id="wrap">
-  <div id="canvasWrap"><canvas id="view"></canvas></div>
+  <div id="left">
+    <div id="canvasWrap">
+      <canvas id="view"></canvas>
+      <!-- On-canvas legend -->
+      <div id="legend">
+        <div class="row"><span class="chip" style="background:#1b4626"></span> Grass</div>
+        <div class="row"><span class="chip" style="background:#2c7033"></span><span class="chip" style="background:#6e4a2e"></span> Tree (wood)</div>
+        <div class="row"><span class="chip" style="background:#828991"></span> Stone</div>
+        <div class="row"><span class="chip" style="background:#c4b54a"></span> Home</div>
+        <div class="row"><span class="chip" style="background:#7cc2ff"></span> Build</div>
+        <div class="row"><span class="chip" style="background:#ff9347"></span> Forager</div>
+        <div class="row"><span class="chip" style="background:#6fe271"></span> Builder</div>
+        <div class="row" style="color:#bbb">Bars = energy, trails = recent path</div>
+      </div>
+    </div>
+  </div>
   <div id="log"></div>
 </div>
 
 <script>
-// ----- tiny logger (shows JS errors on the page) -----
+/* ==========================================================
+   AI Life – Best Mobile Build
+   - Mobile-safe timers (setInterval; Start button)
+   - Agents spawn around HOME; visible offsets
+   - Energy bars + short trails
+   - Clear defaults for survivability & activity
+   ========================================================== */
+
+// ------- Logger (shows errors/notes) -------
 const logDiv=document.getElementById('log');
 function logLine(s){const el=document.createElement('div');el.textContent=s;logDiv.prepend(el)}
 function logClear(){logDiv.innerHTML=''}
 window.addEventListener('error',e=>logLine('⚠️ '+(e.message||e)));
 
-// ----- config (phone-friendly) -----
-const WORLD_W=40, WORLD_H=28, TILE=16;
-const N_TREES=120, N_STONES=70;
-const START_AGENTS=6, FORAGER_RATIO=0.6;
-const START_ENERGY=55, LOW_ENERGY=7, WOOD_TO_BUILD=3, BUILD_REWARD=12, DISCOVERY_REWARD=1;
-const PING_PERIOD=12, PING_COST=1;
-const REPRO_MIN_BUILDS=2, REPRO_MIN_ENERGY=30, MUTATE_STD=0.2;
+// ------- Tuned defaults (phone friendly) -------
+const WORLD_W=32, WORLD_H=24, TILE=18;          // compact world
+const N_TREES=220, N_STONES=140;                // resource rich
+const START_AGENTS=12, FORAGER_RATIO=0.7;       // more foragers
+const START_ENERGY=120, LOW_ENERGY=20;          // survive longer
+const WOOD_TO_BUILD=2, BUILD_REWARD=20;         // builds matter
+const DISCOVERY_REWARD=2;                        // exploring helps
+const PING_PERIOD=10, PING_COST=0;               // free sharing
+const REPRO_MIN_BUILDS=1, REPRO_MIN_ENERGY=40;   // births possible
+const TRAIL_LEN=6;                                // steps remembered for trail
+
+// Tiles
 const T_EMPTY=".", T_TREE="T", T_STONE="S", T_HOME="H", T_BUILD="B";
 
-// ----- seeded rng -----
+// Seeded RNG
 function mulberry32(a){return function(){let t=a+=0x6D2B79F5;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296}}
 let rand=Math.random;
 
-// ----- world / blackboard -----
+// World / Blackboard
 class World{
-  constructor(){this.w=WORLD_W;this.h=WORLD_H;
+  constructor(){
+    this.w=WORLD_W; this.h=WORLD_H;
     this.grid=Array.from({length:this.h},()=>Array(this.w).fill(T_EMPTY));
-    this.home=[this.w>>1,this.h>>1]; this.grid[this.home[1]][this.home[0]]=T_HOME;
+    this.home=[this.w>>1,this.h>>1];
+    this.set(this.home[0],this.home[1],T_HOME);
     this.builds=0; this.stock={wood:0,stone:0};
-    this.scatter(T_TREE,N_TREES); this.scatter(T_STONE,N_STONES);}
+    this.scatter(T_TREE,N_TREES); this.scatter(T_STONE,N_STONES);
+  }
   inBounds(x,y){return x>=0&&y>=0&&x<this.w&&y<this.h}
   tile(x,y){return this.grid[y][x]}
   set(x,y,t){this.grid[y][x]=t}
@@ -80,64 +116,110 @@ class Blackboard{
   all(){return new Set([...this.trees,...this.stones])}
 }
 
-// ----- utils / traits -----
+// Utils / Traits
 let NEXT_ID=0;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 function gauss(std){let u=0,v=0;while(u===0)u=rand();while(v===0)v=rand();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v)*std}
 class Traits{
-  constructor(explore=0.5,vision=2){this.explore=explore;this.vision=vision}
-  mutated(){return new Traits(clamp(this.explore+gauss(MUTATE_STD),0,1),clamp(Math.round(this.vision+gauss(MUTATE_STD)),1,3))}
+  constructor(explore=0.6,vision=2){this.explore=explore;this.vision=vision}
+  mutated(){return new Traits(clamp(this.explore+gauss(0.2),0,1), clamp(Math.round(this.vision+gauss(0.2)),1,3))}
 }
 
-// ----- agent -----
+// Agent
 class Agent{
-  constructor(world,role="forager",parent=null){this.id=NEXT_ID++;this.x=world.home[0];this.y=world.home[1];
-    this.role=role;this.energy=START_ENERGY;this.wood=0;this.stone=0;this.visited=new Set();
-    this.knownTrees=new Set();this.knownStones=new Set();this.builds=0;this.alive=true;
-    this.parent=parent?parent.id:null;this.gen=parent?parent.gen+1:0;
-    this.traits=parent?parent.traits.mutated():new Traits(clamp(0.45+rand()*0.35,0,1),rand()<0.7?2:1);
-    this.lastPing=0}
+  constructor(world,role="forager",parent=null){
+    this.id=NEXT_ID++; this.x=world.home[0]; this.y=world.home[1];
+    this.role=role; this.energy=START_ENERGY;
+    this.wood=0; this.stone=0;
+    this.visited=new Set();
+    this.knownTrees=new Set(); this.knownStones=new Set();
+    this.builds=0; this.alive=true;
+    this.parent=parent?parent.id:null; this.gen=parent?parent.gen+1:0;
+    this.traits=parent?parent.traits.mutated():new Traits(0.6,2); // everyone sees radius 2
+    this.lastPing=0;
+    this.trail=[]; // recent positions for drawing
+  }
   k(x,y){return x+","+y}
   observe(world){
     this.visited.add(this.k(this.x,this.y));
     for(let r=0;r<=this.traits.vision;r++){
       for(const [dx,dy] of [[r,0],[-r,0],[0,r],[0,-r]]){
         const nx=this.x+dx,ny=this.y+dy;
-        if(world.inBounds(nx,ny)){const t=world.tile(nx,ny);if(t===T_TREE)this.knownTrees.add(this.k(nx,ny));if(t===T_STONE)this.knownStones.add(this.k(nx,ny));}
+        if(world.inBounds(nx,ny)){
+          const t=world.tile(nx,ny);
+          if(t===T_TREE) this.knownTrees.add(this.k(nx,ny));
+          if(t===T_STONE) this.knownStones.add(this.k(nx,ny));
+        }
       }
     }
   }
-  tryPing(t,bb){if((t-this.lastPing)>=PING_PERIOD&&this.energy>PING_COST&&this.alive){this.energy-=PING_COST;this.lastPing=t;bb.integrate(this.knownTrees,this.knownStones);logLine(`t${t}: Agent ${this.id} 📡`)}}
-  moveTowards(tx,ty){if(tx<this.x)return"W";if(tx>this.x)return"E";if(ty<this.y)return"N";if(ty>this.y)return"S";return"WAIT"}
+  tryPing(t,bb){
+    if((t-this.lastPing)>=PING_PERIOD && this.energy>PING_COST && this.alive){
+      this.energy -= PING_COST; this.lastPing=t; bb.integrate(this.knownTrees,this.knownStones);
+      // logLine(`t${t}: Agent ${this.id} 📡`)
+    }
+  }
+  moveTowards(tx,ty){ if(tx<this.x)return"W"; if(tx>this.x)return"E"; if(ty<this.y)return"N"; if(ty>this.y)return"S"; return"WAIT"; }
   choose(world,bb){
-    if(!this.alive)return"WAIT";
-    if(this.energy<=LOW_ENERGY&&(this.x!==world.home[0]||this.y!==world.home[1]))return this.moveTowards(...world.home);
+    if(!this.alive) return "WAIT";
+    if(this.energy<=LOW_ENERGY && (this.x!==world.home[0]||this.y!==world.home[1])) return this.moveTowards(...world.home);
     const atHome=(this.x===world.home[0]&&this.y===world.home[1]);
-    if(atHome&&(this.wood>0||this.stone>0))return"DEPOSIT";
-    if(atHome&&this.role==="builder"&&world.stock.wood>=WOOD_TO_BUILD)return"BUILD_STOCK";
-    if(atHome&&this.wood>=WOOD_TO_BUILD)return"BUILD";
-    for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){const nx=this.x+dx,ny=this.y+dy;if(world.inBounds(nx,ny)){const t=world.tile(nx,ny);if(t===T_TREE||t===T_STONE)return"GATHER"}}
-    const explore=rand()<this.traits.explore, targets=new Set([...this.knownTrees,...this.knownStones,...bb.all()]);
-    if(!explore&&targets.size){let best=null,d=1e9;for(const k of targets){const[tx,ty]=k.split(",").map(Number),dd=Math.abs(tx-this.x)+Math.abs(ty-this.y);if(dd<d){d=dd;best=[tx,ty]}}if(best)return this.moveTowards(...best)}
-    return["N","S","W","E"][(Math.random()*4)|0]; // small desync
+    if(atHome && (this.wood>0||this.stone>0)) return "DEPOSIT";
+    if(atHome && this.role==="builder" && world.stock.wood>=WOOD_TO_BUILD) return "BUILD_STOCK";
+    if(atHome && this.wood>=WOOD_TO_BUILD) return "BUILD";
+    for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){const nx=this.x+dx,ny=this.y+dy;if(world.inBounds(nx,ny)){const t=world.tile(nx,ny);if(t===T_TREE||t===T_STONE) return "GATHER";}}
+    const explore = rand() < this.traits.explore;
+    const targets = new Set([...this.knownTrees, ...this.knownStones, ...bb.all()]);
+    if(!explore && targets.size){
+      let best=null,d=1e9;
+      for(const k of targets){const[tx,ty]=k.split(",").map(Number),dd=Math.abs(tx-this.x)+Math.abs(ty-this.y); if(dd<d){d=dd; best=[tx,ty];}}
+      if(best) return this.moveTowards(...best);
+    }
+    return ["N","S","W","E"][(Math.random()*4)|0]; // slight desync
   }
   step(world,act){
-    if(!this.alive)return;
-    this.energy-=1;if(!this.visited.has(this.k(this.x,this.y)))this.energy+=DISCOVERY_REWARD;
-    const mv=(dx,dy)=>{const nx=this.x+dx,ny=this.y+dy;if(world.inBounds(nx,ny)){this.x=nx;this.y=ny}}
-    if(act==="N")mv(0,-1); else if(act==="S")mv(0,1); else if(act==="W")mv(-1,0); else if(act==="E")mv(1,0);
-    else if(act==="GATHER"){for(const[dx,dy]of[[1,0],[-1,0],[0,1],[0,-1]]){const nx=this.x+dx,ny=this.y+dy;if(world.inBounds(nx,ny)){const t=world.tile(nx,ny);if(t===T_TREE){this.wood++;world.set(nx,ny,T_EMPTY);break}if(t===T_STONE){this.stone++;world.set(nx,ny,T_EMPTY);break}}}}
-    else if(act==="DEPOSIT"&&this.x===world.home[0]&&this.y===world.home[1]){world.stock.wood+=this.wood;world.stock.stone+=this.stone;this.wood=0;this.stone=0}
-    else if(act==="BUILD"&&this.x===world.home[0]&&this.y===world.home[1]&&this.wood>=WOOD_TO_BUILD){this.wood-=WOOD_TO_BUILD;this.energy+=BUILD_REWARD;world.builds++;this.builds++;world.set(...world.home,T_BUILD)}
-    else if(act==="BUILD_STOCK"&&this.x===world.home[0]&&this.y===world.home[1]&&world.stock.wood>=WOOD_TO_BUILD){world.stock.wood-=WOOD_TO_BUILD;this.energy+=BUILD_REWARD;world.builds++;this.builds++;world.set(...world.home,T_BUILD)}
-    this.observe(world); if(this.energy<=0)this.alive=false;
+    if(!this.alive) return;
+    this.energy -= 1;
+    if(!this.visited.has(this.k(this.x,this.y))) this.energy += DISCOVERY_REWARD;
+
+    // record trail
+    this.trail.push([this.x,this.y]);
+    if(this.trail.length>TRAIL_LEN) this.trail.shift();
+
+    const mv=(dx,dy)=>{const nx=this.x+dx,ny=this.y+dy;if(world.inBounds(nx,ny)){this.x=nx;this.y=ny;}};
+    if(act==="N") mv(0,-1);
+    else if(act==="S") mv(0,1);
+    else if(act==="W") mv(-1,0);
+    else if(act==="E") mv(1,0);
+    else if(act==="GATHER"){
+      for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+        const nx=this.x+dx, ny=this.y+dy;
+        if(world.inBounds(nx,ny)){
+          const t=world.tile(nx,ny);
+          if(t===T_TREE){ this.wood++; world.set(nx,ny,T_EMPTY); break; }
+          if(t===T_STONE){ this.stone++; world.set(nx,ny,T_EMPTY); break; }
+        }
+      }
+    }
+    else if(act==="DEPOSIT" && this.x===world.home[0] && this.y===world.home[1]){
+      world.stock.wood += this.wood; world.stock.stone += this.stone; this.wood=0; this.stone=0;
+    }
+    else if(act==="BUILD" && this.x===world.home[0] && this.y===world.home[1] && this.wood>=WOOD_TO_BUILD){
+      this.wood -= WOOD_TO_BUILD; this.energy += BUILD_REWARD; world.builds++; this.builds++; world.set(...world.home, T_BUILD);
+    }
+    else if(act==="BUILD_STOCK" && this.x===world.home[0] && this.y===world.home[1] && world.stock.wood>=WOOD_TO_BUILD){
+      world.stock.wood -= WOOD_TO_BUILD; this.energy += BUILD_REWARD; world.builds++; this.builds++; world.set(...world.home, T_BUILD);
+    }
+    this.observe(world);
+    if(this.energy<=0) this.alive=false;
   }
 }
 
-// ----- canvas & sprites (no scaling transforms) -----
+// Canvas & sprites (no transform scaling)
 const view=document.getElementById('view'); const ctx=view.getContext('2d',{alpha:false}); ctx.imageSmoothingEnabled=false;
 view.width=WORLD_W*TILE; view.height=WORLD_H*TILE;
 
+// Tiny 8x8 sprite factory
 const spr=document.createElement('canvas'); spr.width=8; spr.height=8; const spx=spr.getContext('2d');
 function spriteFill(cols){spx.clearRect(0,0,8,8);for(let y=0;y<8;y++)for(let x=0;x<8;x++){const c=cols[y][x];if(!c)continue;spx.fillStyle=c;spx.fillRect(x,y,1,1)}return spr}
 const C={grass:["#173a1f","#1b4626","#1e512b","#235c32"],tree:["#245c2a","#2c7033","#35853d","#0f3b17"],trunk:["#6e4a2e","#5a3d26"],stone:["#6b6f76","#828991","#a1a7ad","#52565b"],home:["#c4b54a","#e0d36a","#bba93f"],build:["#a5d6ff","#7cc2ff","#d4efff"],agentF:["#ffb347","#ff9347","#ff7a47"],agentB:["#8be88f","#6fe271","#55dc56"]};
@@ -147,45 +229,120 @@ function makeStone(){const s=Array.from({length:8},()=>Array(8).fill(null));for(
 function makeHome(cols){const h=Array.from({length:8},()=>Array(8).fill(null));for(let y=2;y<6;y++)for(let x=2;x<6;x++)h[y][x]=cols[(x+y)%cols.length];for(let y=4;y<6;y++)for(let x=3;x<5;x++)h[y][x]="#2a1b0d";return spriteFill(h)}
 const SPR_GRASS=makeGrass(), SPR_TREE=makeTree(), SPR_STONE=makeStone(), SPR_HOME=makeHome(C.home), SPR_BUILD=makeHome(C.build);
 
+// HUD
+const hudStep=document.getElementById('hudStep'), hudAgents=document.getElementById('hudAgents'), hudBuilds=document.getElementById('hudBuilds'), hudStock=document.getElementById('hudStock'), hudBirths=document.getElementById('hudBirths');
+function updateHud(){hudStep.textContent=`Step: ${stepCount}`;const alive=agents.filter(a=>a.alive).length;hudAgents.textContent=`Agents: ${alive}/${agents.length}`;hudBuilds.textContent=`Builds: ${world.builds}`;hudStock.textContent=`Stockpile: wood ${world.stock.wood} | stone ${world.stock.stone}`;hudBirths.textContent=`Births: ${births}`}
+
+// Sim state
+let world,blackboard,agents,births,stepCount,paused=true,timer=null;
+
+// Reset world + spawn agents around HOME (ring) so they don’t overlap
+function reset(seed){
+  rand=mulberry32((+seed||0)||22);
+  NEXT_ID=0; births=0; stepCount=0;
+  world=new World(); blackboard=new Blackboard(); agents=[];
+  const ring=[[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[1,1],[-1,1],[1,-1],[2,0],[-2,0],[0,2],[0,-2]];
+  const [hx,hy]=world.home;
+  for(let i=0;i<START_AGENTS;i++){
+    const role = rand()<FORAGER_RATIO ? "forager" : "builder";
+    const a=new Agent(world,role,null);
+    const [dx,dy]=ring[i%ring.length];
+    a.x=Math.max(0,Math.min(world.w-1,hx+dx));
+    a.y=Math.max(0,Math.min(world.h-1,hy+dy));
+    a.observe(world);
+    agents.push(a);
+  }
+  logClear(); logLine(`Reset seed ${seed}. Agents: ${agents.length}.`);
+  updateHud(); drawWorld();
+}
+
+function maybeReproduce(a){
+  if(a.alive && a.builds>=REPRO_MIN_BUILDS && a.energy>=REPRO_MIN_ENERGY){
+    const child=new Agent(world,(rand()<FORAGER_RATIO?"forager":"builder"),a);
+    // place child near HOME as well
+    const ring=[[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[1,1],[-1,1],[1,-1]];
+    const [hx,hy]=world.home; const [dx,dy]=ring[(agents.length)%ring.length];
+    child.x=Math.max(0,Math.min(world.w-1,hx+dx));
+    child.y=Math.max(0,Math.min(world.h-1,hy+dy));
+    child.observe(world); agents.push(child);
+    a.energy -= 5; births++;
+    logLine(`Birth: Agent ${child.id} (gen ${child.gen}) from ${a.id}`);
+  }
+}
+
+function tick(){
+  if(paused) return;
+  stepCount++;
+  for(const a of agents) if(a.alive) a.tryPing(stepCount,blackboard);
+  for(const a of agents){
+    if(!a.alive) continue;
+    const act=a.choose(world,blackboard);
+    a.step(world,act);
+    if(!a.alive) logLine(`t${stepCount}: Agent ${a.id} ☠️`);
+    maybeReproduce(a);
+  }
+  updateHud(); drawWorld();
+}
+
+// Rendering
 function drawWorld(){
+  // Base grass + resources/home/builds
   for(let y=0;y<world.h;y++){
     for(let x=0;x<world.w;x++){
       ctx.drawImage(SPR_GRASS,0,0,8,8,x*TILE,y*TILE,TILE,TILE);
       const t=world.tile(x,y);
-      if(t===T_TREE)ctx.drawImage(SPR_TREE,0,0,8,8,x*TILE,y*TILE,TILE,TILE);
-      else if(t===T_STONE)ctx.drawImage(SPR_STONE,0,0,8,8,x*TILE,y*TILE,TILE,TILE);
-      else if(t===T_HOME)ctx.drawImage(SPR_HOME,0,0,8,8,x*TILE,y*TILE,TILE,TILE);
-      else if(t===T_BUILD)ctx.drawImage(SPR_BUILD,0,0,8,8,x*TILE,y*TILE,TILE,TILE);
+      if(t===T_TREE)  ctx.drawImage(SPR_TREE ,0,0,8,8,x*TILE,y*TILE,TILE,TILE);
+      else if(t===T_STONE) ctx.drawImage(SPR_STONE,0,0,8,8,x*TILE,y*TILE,TILE,TILE);
+      else if(t===T_HOME)  ctx.drawImage(SPR_HOME ,0,0,8,8,x*TILE,y*TILE,TILE,TILE);
+      else if(t===T_BUILD) ctx.drawImage(SPR_BUILD,0,0,8,8,x*TILE,y*TILE,TILE,TILE);
     }
   }
+  // Agents (trail → body → energy bar)
   for(const a of agents){
-    if(!a.alive)continue;
-    const cols=(a.role==="forager")?C.agentF:C.agentB;
+    if(!a.alive) continue;
+
+    // trail (faint squares)
+    ctx.globalAlpha=0.35;
+    for(let i=0;i<a.trail.length;i++){
+      const [tx,ty]=a.trail[i];
+      ctx.fillStyle = (a.role==="forager") ? "#664026" : "#2a5a2d"; // dim orange/green
+      ctx.fillRect(tx*TILE+TILE/3, ty*TILE+TILE/3, TILE/3, TILE/3);
+    }
+    ctx.globalAlpha=1;
+
+    // tiny per-agent offset so multiple in same tile are visible
+    const ox = ((a.id*37)%3-1) * Math.floor(TILE/4);
+    const oy = ((a.id*53)%3-1) * Math.floor(TILE/4);
+
+    // body
+    const cols=(a.role==="forager")?["#ffb347","#ff9347","#ff7a47"]:["#8be88f","#6fe271","#55dc56"];
+    // 6x6 blob
     spx.clearRect(0,0,8,8);
-    for(let yy=1;yy<7;yy++)for(let xx=1;xx<7;xx++){if((xx===1||xx===6)&&(yy===1||yy===6))continue;spx.fillStyle=cols[(xx+yy)%cols.length];spx.fillRect(xx,yy,1,1)}
-    ctx.drawImage(spr,0,0,8,8,a.x*TILE,a.y*TILE,TILE,TILE);
+    for(let yy=1;yy<7;yy++) for(let xx=1;xx<7;xx++){
+      if((xx===1||xx===6)&&(yy===1||yy===6)) continue;
+      spx.fillStyle = cols[(xx+yy)%cols.length];
+      spx.fillRect(xx,yy,1,1);
+    }
+    ctx.drawImage(spr,0,0,8,8, a.x*TILE+ox, a.y*TILE+oy, TILE, TILE);
+
+    // energy bar (top of tile)
+    const eFrac = Math.max(0, Math.min(1, a.energy/START_ENERGY));
+    const bw = Math.max(2, Math.floor((TILE-2)*eFrac));
+    ctx.fillStyle = eFrac>0.5 ? "#7cff9a" : (eFrac>0.2 ? "#ffd36e" : "#ff6868");
+    ctx.fillRect(a.x*TILE+1, a.y*TILE+1, bw, 3);
   }
 }
 
-// ----- HUD -----
-const hudStep=document.getElementById('hudStep'), hudAgents=document.getElementById('hudAgents'), hudBuilds=document.getElementById('hudBuilds'), hudStock=document.getElementById('hudStock'), hudBirths=document.getElementById('hudBirths');
-function updateHud(){hudStep.textContent=`Step: ${stepCount}`;const alive=agents.filter(a=>a.alive).length;hudAgents.textContent=`Agents: ${alive}/${agents.length}`;hudBuilds.textContent=`Builds: ${world.builds}`;hudStock.textContent=`Stockpile: wood ${world.stock.wood} | stone ${world.stock.stone}`;hudBirths.textContent=`Births: ${births}`}
-
-// ----- sim loop (setInterval; starts on user tap) -----
-let world,blackboard,agents,births,stepCount,paused=true,timer=null;
-function reset(seed){rand=mulberry32((+seed||0)||22);NEXT_ID=0;births=0;stepCount=0;world=new World();blackboard=new Blackboard();agents=[];for(let i=0;i<START_AGENTS;i++){const role=rand()<FORAGER_RATIO?"forager":"builder";const a=new Agent(world,role,null);a.observe(world);agents.push(a)}logClear();logLine(`Reset seed ${seed}. Agents: ${agents.length}.`);updateHud();drawWorld()}
-function maybeReproduce(a){if(a.alive&&a.builds>=REPRO_MIN_BUILDS&&a.energy>=REPRO_MIN_ENERGY){const child=new Agent(world,(rand()<FORAGER_RATIO?"forager":"builder"),a);child.observe(world);agents.push(child);a.energy-=5;births++;logLine(`Birth: Agent ${child.id} (gen ${child.gen}) from ${a.id}`)}}
-function tick(){if(paused)return;stepCount++;for(const a of agents)if(a.alive)a.tryPing(stepCount,blackboard);for(const a of agents){if(!a.alive)continue;const act=a.choose(world,blackboard);a.step(world,act);if(!a.alive)logLine(`t${stepCount}: Agent ${a.id} ☠️`);maybeReproduce(a)}updateHud();drawWorld()}
-
-// ----- controls -----
+// Controls
 const btnStart=document.getElementById('btnStart'), btnPause=document.getElementById('btnPause'), btnStep=document.getElementById('btnStep'), btnReset=document.getElementById('btnReset');
-btnStart.onclick=()=>{btnPause.disabled=btnStep.disabled=btnReset.disabled=false;btnStart.disabled=true;paused=false;const upd=()=>{if(timer)clearInterval(timer);const sp=+document.getElementById('speed').value;const ms=Math.max(1,Math.round(1000/Math.max(1,sp)));timer=setInterval(tick,ms)};upd();document.getElementById('speed').addEventListener('input',upd)}
-btnPause.onclick=()=>{paused=!paused;btnPause.textContent=paused?"▶️ Resume":"⏸️ Pause"}
-btnStep.onclick=()=>{const was=paused;paused=true;tick();paused=was||true}
-btnReset.onclick=()=>{reset(document.getElementById('seed').value)}
+btnStart.onclick=()=>{btnPause.disabled=btnStep.disabled=btnReset.disabled=false;btnStart.disabled=true;paused=false;const upd=()=>{if(timer)clearInterval(timer);const sp=+document.getElementById('speed').value;const ms=Math.max(1,Math.round(1000/Math.max(1,sp)));timer=setInterval(tick,ms)};upd();document.getElementById('speed').addEventListener('input',upd)};
+btnPause.onclick=()=>{paused=!paused;btnPause.textContent=paused?"▶️ Resume":"⏸️ Pause"};
+btnStep.onclick=()=>{const was=paused;paused=true;tick();paused=was||true};
+btnReset.onclick=()=>{reset(document.getElementById('seed').value)};
 
-// ----- boot -----
-reset(22); logLine("✅ Loaded. Tap Start.");
+// Boot
+reset(22);
+logLine("✅ Loaded. Tap Start.");
 </script>
 </body>
 </html>
